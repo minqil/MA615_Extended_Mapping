@@ -1,0 +1,234 @@
+---
+title: "Mapping With More Data"
+author: "Chenxun Li and Minqi Li"
+date: "November 11, 2020"
+output:
+  revealjs::revealjs_presentation:
+    theme: sky
+    highlight: pygments
+    css: reveal.css
+    center: yes
+    transition: slide
+    html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(srvyr)
+library(knitr)
+library(reshape2)
+library(magrittr)
+library(lubridate)
+library(ggplot2)
+library(maps)
+
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+PublicAssistanceFundedProjectsDetails <- read_csv("PublicAssistanceFundedProjectsDetails.csv")
+```
+
+```{r echo=FALSE}
+original_hurricane <- filter(PublicAssistanceFundedProjectsDetails, incidentType=="Hurricane")
+```
+
+
+```{r data processing, include=FALSE}
+
+hurr_num <- original_hurricane %>%
+  select(disasterNumber, declarationDate, county, countyCode, state, stateCode, stateNumberCode)
+
+# way1: use 'separate()' to select year
+hurr_num %<>%separate(`declarationDate`, c("Year","Month", "Day"), sep = "-")
+hurr_num %<>% select(-c(Month, Day))
+
+# for bar chart
+hurr_num_bar <- hurr_num %>% 
+  group_by(state) %>%
+  summarize(hurricanes=n_distinct(disasterNumber)) %>%
+  arrange(desc(hurricanes))
+
+#for mapping
+hurr_num_map<- hurr_num %>% 
+  group_by(state,stateCode,stateNumberCode,county,countyCode,Year) %>%
+  summarize(hurricanes=n_distinct(disasterNumber)) %>%
+  arrange(desc(hurricanes))
+```
+
+
+# The Number of Hurricanes in Each State
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+a <- ggplot(hurr_num_bar, aes(x=state, y=hurricanes))+
+  geom_bar(stat = "identity", fill = "lightblue")+
+  coord_flip()+
+  geom_text(aes(label = hurricanes), vjust = 0.5, colour = "black", position = position_dodge(.9), size = 3)+
+  theme(panel.background=element_rect(fill='transparent',
+                                      color ="gray"), 
+        axis.text.x = element_text( hjust = 0.5, 
+                                   vjust = 0.5,color = "black",size=5))+
+  xlab("State")+ylab("Count")+
+  ggtitle("The Number of Hurricanes in Each State(1998-2020)")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r echo=FALSE}
+a
+```
+
+
+# The Number of Hurricanes in Each County
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+MainStates <- map_data("state")
+AllCounty <- map_data("county")
+
+hurr_num_map$county %<>% tolower()
+hurr_map <- left_join(hurr_num_map, AllCounty, by = c("county"="subregion"))
+
+b <- ggplot() + 
+  geom_polygon(data=AllCounty, aes(x=long, y=lat, group=group),
+               color="gray", fill="white", size = .1 ) + 
+  geom_polygon(data = hurr_map, aes(x = long, y = lat, group = group,fill = `hurricanes`), color = "grey", size = 0.2, alpha = 1.6) +
+  scale_fill_gradient(low="steelblue",high="blue")+
+  geom_polygon(data=MainStates, aes(x=long, y=lat, group=group),color="black", fill="white",  size = .5, alpha = .3) +
+  ggtitle("The Number of Hurricanes in Each County(1998-2020)") +
+  xlab("Longtitude")+ylab("Latitude")+labs(fill="Count")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r echo=FALSE}
+b
+```
+
+
+# Different Expenses in Each Damage Category
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Different Expenses in Each Damage Category and Area
+## In this part, we will process our data and use 'ggplot()' to graph the bar and map.
+
+## Data processing
+## First, we need select and summarize the specific columns.
+hurricane_damage_cate_sum <- original_hurricane%>%
+  group_by(damageCategoryCode)%>%
+  srvyr::summarize(projectAmount_sum=sum(projectAmount),
+  federalShareObligated_sum=sum(federalShareObligated),totalObligated_sum=sum(totalObligated))
+
+# Then, we use 'melt()' to change the format of the table.
+final_hurricane <- melt(hurricane_damage_cate_sum,id.vars = c("damageCategoryCode"), variable.name = "cost_cate", value.name= "cost_dollar")
+
+#Finally, we can get the new data set for plotting.
+
+b <- ggplot(final_hurricane, mapping = aes(x=damageCategoryCode, y=cost_dollar,fill=cost_cate))+
+  coord_flip()+
+  geom_bar(stat = "identity",position = "dodge")+
+  ggtitle("Different Expenses in Each Damage Category(1998-2020)")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("Damage Category")+
+  ylab("Expenses($ in million)")+
+  labs(fill="Expense Categories")+
+  scale_fill_manual(values = c("#186598","#9ecae1","#3182bd"),labels =c("Project Amount","Federal Share Obligated","Total Obligated"))
+
+```
+
+```{r echo = FALSE}
+b
+```
+
+
+# Total Obligated Expenses in Each Area
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.align='center',fig.height=0.5}
+# Mapping
+## First, we still summarize the columns we want.
+
+#way2: use 'substring()' to select year 
+hurricane_ob <- original_hurricane%>%group_by(region=state,subregion=county,year=substring(declarationDate,1,4))%>%
+  srvyr::summarize(totalObligated_sum=sum(totalObligated),count=n())
+
+hurricane_ob$totalObligated_sum_million <- hurricane_ob$totalObligated_sum/1000000
+
+#make the lettew to lowercase to merge
+hurricane_ob$region <- tolower(hurricane_ob$region)
+hurricane_ob$subregion <- tolower(hurricane_ob$subregion)
+
+# Then, we still add the county's longitude and latitude to our data set.
+map_states <- map_data("county", unique(hurricane_ob$state))
+map_states_border <- map_data("state",unique(hurricane_ob$state))
+
+final_hurricane_ob <- merge(hurricane_ob,map_states,by=c("region","subregion"))
+
+# Finally, we can plot the map.
+options(
+      ggplot2.continuous.colour = "viridis",
+      ggplot2.continuous.fill = "viridis"
+    )
+p <- ggplot()+
+  geom_polygon(final_hurricane_ob, mapping = aes(x=long,y=lat,group=group, fill=totalObligated_sum_million))+
+  geom_path(map_states, mapping=aes(x=long, y=lat, group=group),color="grey")+
+  geom_path(map_states_border, mapping=aes(x=long, y=lat, group=group),color="black")+
+  xlim(min(map_states$long),max(map_states$long))+
+  ylim(min(map_states$lat),max(map_states$lat))+
+  #change the name of x, y, and title
+  xlab("Longtitude")+ylab("Latitude")+
+  labs(fill="Sum of Total Obligated
+       in million")+
+  ggtitle("Total Obligated Expenses in Each Area(1998-2020)")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r echo = FALSE}
+p
+```
+
+# Numbers of Expenses in Each Area
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,fig.align='center',fig.height=3.5}
+options(
+      ggplot2.continuous.colour = "viridis",
+      ggplot2.continuous.fill = "viridis"
+    )
+p1 <- ggplot()+
+  geom_polygon(final_hurricane_ob, mapping = aes(x=long,y=lat,group=group, fill=count))+
+  geom_path(map_states, mapping=aes(x=long, y=lat, group=group),color="grey")+
+  geom_path(map_states_border, mapping=aes(x=long, y=lat, group=group),color="black")+
+  xlim(min(map_states$long),max(map_states$long))+
+  ylim(min(map_states$lat),max(map_states$lat))+
+  #change the name of x, y, and title
+  xlab("Longtitude")+ylab("Latitude")+
+  ggtitle("Numbers of Expenses in Each Area(1998-2020)")+labs(fill="Count")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r echo = FALSE}
+p1
+```
+
+# Discussion
+
+* Based on the bar chart of number of hurricanes in each state, we can conclude that hurricanes happened more in Virginia, North Carolina, Texas, Mississippi, Louisiana, Alabama and Florida than other states from 1998 to 2020. Among these states, hurricanes happened 23 times in Florida which is the most.
+
+* According to three maps, we can find that the more hurricanes happen, the more public assistance programs and expenses are.
+
+* Based on the bar chart of different expenses in each damage category, we can conclude that public assistance programs' expenses are mainly used in public utilities, public buildings, protective measures and debris removal. 
+
+
+# References
+
+1. Yihui Xie (2020). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.29. https://github.com/yihui/knitr
+
+2. Hadley Wickham (2019). tidyverse: Easily Install and Load the 'Tidyverse'. R package version 1.3.0. https://cloud.r-project.org/package=tidyverse
+
+3. Greg Freedman Ellis, Thomas Lumley, Tomasz Żółtak and Ben Schneider (2020). srvyr:'dplyr'-Like Syntax for Summary Statistics of SUrvey Data. R package version 0.4.0. https://cloud.r-project.org/package=srvyr
+
+4. Hadley Wickham (2020). reshape2: Flexibly Reshape Data: A Reboot of the Reshape Package. R package version 1.4.4. https://github.com/hadley/reshape
+
+5. Stefan Milton Bache and Hadley Wickham (2014). magrittr: A Forward-Pipe Operator for R. R package version 1.5. https://cran.rstudio.com/web/packages/magrittr/index.html
